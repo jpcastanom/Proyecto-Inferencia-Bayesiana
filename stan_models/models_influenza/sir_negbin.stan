@@ -1,19 +1,19 @@
 functions {
-  real[] sir(real t, real[] y, real[] theta, 
+  real[] sir(real t, real[] y, real[] theta,
              real[] x_r, int[] x_i) {
 
       real S = y[1];
       real I = y[2];
       real R = y[3];
       real N = x_i[1];
-      
+
       real beta = theta[1];
       real gamma = theta[2];
-      
+
       real dS_dt = -beta * I * S / N;
       real dI_dt =  beta * I * S / N - gamma * I;
       real dR_dt =  gamma * I;
-      
+
       return {dS_dt, dI_dt, dR_dt};
   }
 }
@@ -50,16 +50,16 @@ model {
   beta ~ normal(2, 1);
   gamma ~ normal(0.4, 0.5);
   phi_inv ~ exponential(5);
-  
+
   //sampling distribution
   cases ~ neg_binomial_2(col(to_matrix(y), 2), phi);
 }
 generated quantities {
   real R0 = beta / gamma;
-  real recovery_time = 1 / gamma;
+  real tiempo_recuperacion = 1 / gamma;
   real pred_cases[n_days];
-  
-  //col(matrix x, int n) - The n-th column of matrix x. Here the number of infected people 
+
+  //col(matrix x, int n) - The n-th column of matrix x. Here the number of infected people
   pred_cases = neg_binomial_2_rng(col(to_matrix(y), 2), phi);
 }
 

@@ -1,6 +1,6 @@
 ---
 title: "Replicación de resultados del artículo 'Bayesian workflow for disease transmission modeling in Stan'"
-author: Juan Pablo Castaño Morales, Jacobo Ramirez Arias 
+author: Juan Pablo Castaño Morales, Jacobo Ramírez Arias 
 link-citations: true
 output:
   pdf_document:
@@ -51,7 +51,7 @@ head(influenza_england_1978_school)
 theme_set(theme_bw())
 ggplot(data = influenza_england_1978_school) + 
   geom_point(mapping = aes(x = date, y = in_bed)) + 
-  labs(y = "Number of students in bed")
+  labs(x = "días", y = "Número de estudiantes en cama")
 ```
 
 ## Modelo matemático de transmisión
@@ -249,7 +249,7 @@ Untangled from the inference, we can calculate the basic reproduction number, $R
 ```{stan, eval=F, output.var="md"}
 generated quantities {
   real R0 = beta / gamma;
-  real recovery_time = 1 / gamma;
+  real tiempo_recuperacion = 1 / gamma;
   real pred_cases[n_days];
   pred_cases = neg_binomial_2_rng(col(to_matrix(y), 2) + 1e-5, phi);
 }
@@ -319,7 +319,7 @@ check_hmc_diagnostics(fit_sir_negbin)
 Especifiquemos los parámetros de interés.
 
 ```{r}
-pars=c('beta', 'gamma', "R0", "recovery_time")
+pars=c('beta', 'gamma', "R0", "tiempo_recuperacion")
 ```
 
 <!-- Aquí mostramos la mediana (cuantil 0.5) y el intervalo del 90% (cuantiles 0.05 y 0.95), restringidos a los parámetros de interés. -->
@@ -441,7 +441,7 @@ model {
 }
 generated quantities {
   real R0 = beta / gamma;
-  real recovery_time = 1 / gamma;
+  real tiempo_recuperacion = 1 / gamma;
   real pred_cases[n_days];
   pred_cases = neg_binomial_2_rng(col(to_matrix(y), 2), phi);
 }
@@ -480,7 +480,7 @@ Esto nos proporciona muestras de la distribución *a priori* de los parámetros,
 
 ```{r}
 s_prior <- rstan::extract(fit_sir_prior)
-ggplot(tibble(r = s_prior$recovery_time)) + 
+ggplot(tibble(r = s_prior$tiempo_recuperacion)) + 
   geom_density(aes(x = r),fill=c_prior, alpha = 0.6) + 
   geom_vline(xintercept = c(0.5,30), color = "red",linetype=2) + 
   scale_x_log10() +
