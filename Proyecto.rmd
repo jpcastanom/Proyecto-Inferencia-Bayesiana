@@ -1,0 +1,593 @@
+---
+title: "Replicación de resultados del artículo 'Bayesian workflow for disease transmission modeling in Stan'"
+author: Juan Pablo Castaño Morales, Jacobo Ramirez Arias 
+link-citations: true
+output:
+  pdf_document:
+    toc: true
+    toc_depth: '5'
+  html_document:
+    toc: true
+    toc_depth: 5
+    toc_float: true
+bibliography: biblio.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# color palette
+c_light <- c("#fee0d2")
+c_mid <- c("#fc9272")
+c_dark <- c("#de2d26")
+c_simu <- "chartreuse3"
+c_posterior = "orange"
+c_prior = "aquamarine2"
+
+set.seed(1) # for reproductibility
+```
+
+## Introducción
+
+El modelado de enfermedades infecciosas ha evolucionado significativamente desde la formulación clásica del modelo Susceptible-Infectado-Recuperado (SIR). En la actualidad, la integración de sistemas de ecuaciones diferenciales ordinarias (ODE) con métodos computacionales de inferencia bayesiana permite una estimación robusta de parámetros biológicos bajo escenarios de alta incertidumbre. Herramientas como \textbf{Stan}, un lenguaje de programación probabilístico, han estandarizado el flujo de trabajo bayesiano, permitiendo que investigadores traduzcan modelos epidemiológicos complejos en estimaciones estadísticas precisas mediante el uso de algoritmos de Monte Carlo por Cadenas de Markov (MCMC).
+
+El presente trabajo se centra en la replicación de estos flujos de trabajo científicos mediante la reproducción de los resultados que exponen los autores \citeauthor{Grinsztajn2020}. Se toma como base el estudio de un brote de influenza ocurrido en 1978 en un internado británico, el cual sirve como caso de referencia para demostrar la capacidad de los modelos SIR y la inferencia bayesiana de capturar la dinámica de transmisión en poblaciones cerradas.
+
+# 1 SIR
+
+## Datos
+
+Examinamos un brote de influenza A (H1N1) en 1978 en un internado británico. Los datos consisten en el número diario de estudiantes en cama, abarcando un intervalo de tiempo de 14 días. Había 763 estudiantes varones que en su mayoría eran internos completos, y 512 de ellos se enfermaron. El brote duró desde el 22 de enero hasta el 4 de febrero. Se informa que un estudiante infectado inició la epidemia, la cual se propagó rápidamente en la comunidad relativamente cerrada del internado. <!-- Los datos originales estaban disponibles solo en una figura con información adicional en el [texto principal](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC1603269/pdf/brmedj00115-0064.pdf). --> Los datos están disponibles libremente en el paquete de R outbreaks, mantenido como parte del [R Epidemics Consortium](http://www.repidemicsconsortium.org)..
+
+```{r, message=FALSE}
+library(outbreaks)
+library(tidyverse)
+```
+
+```{r}
+head(influenza_england_1978_school)
+```
+
+```{r}
+theme_set(theme_bw())
+ggplot(data = influenza_england_1978_school) + 
+  geom_point(mapping = aes(x = date, y = in_bed)) + 
+  labs(y = "Number of students in bed")
+```
+
+## Modelo matemático de transmisión
+
+El modelo Susceptible-Infectado-Recuperado (SIR) divide la población en tres compartimentos dependientes del tiempo: susceptibles, infectados (e infecciosos) y recuperados (y no infecciosos). Cuando un individuo susceptible entra en contacto con un individuo infeccioso, el primero puede infectarse durante cierto tiempo y luego recuperarse, volviéndose inmune.
+
+La dinámica temporal del tamaño de cada compartimento está gobernada por el siguiente sistema de ecuaciones diferenciales ordinarias (EDO):
+
+$$
+\begin{aligned}
+ \frac{dS}{dt} &= -\beta  S \frac{I}{N}\\
+ \frac{dI}{dt} &= \beta  S  \frac{I}{N} - \gamma  I \\
+ \frac{dR}{dt} &= \gamma I
+\end{aligned}
+$$
+
+donde:
+
+$S(t)$ es el número de personas susceptibles de infectarse (sin inmunidad),
+
+$I(t)$ es el número de personas actualmente infectadas (e infecciosas),
+
+$R(t)$ es el número de personas recuperadas (se asume que permanecen inmunes indefinidamente),
+
+$\beta$ es la tasa constante de contacto infeccioso entre individuos,
+
+$\gamma$ es la tasa constante de recuperación de los individuos infectados.
+
+Demos algo de intuición sobre estas ecuaciones. La proporción de personas infectadas en la población es $\frac{I}{N}$. En cada instante de tiempo, bajo el supuesto de contactos uniformes, la probabilidad de que una persona susceptible se infecte es $\beta\frac{I}{N}$, donde $\beta$ representa el número promedio de contactos por persona y por unidad de tiempo, multiplicado por la probabilidad de transmisión de la enfermedad cuando un susceptible y un infectado entran en contacto. Por lo tanto, en cada instante, $\beta  S \frac{I}{N}$ individuos susceptibles se infectan, lo que implica que $\beta  S \frac{I}{N}$ personas salen del compartimento $S$ y la misma cantidad entra al compartimento $I$. De manera similar, la recuperación de un individuo infectado ocurre a una tasa $\gamma$, por lo que el número de infectados disminuye a una velocidad $\gamma I$, mientras que el número de recuperados aumenta a esa misma velocidad.
+
+El modelo anterior se basa en varios supuestos:
+
+-   Los nacimientos y muertes no contribuyen a la dinámica y la población total $N = S + I + R$ permanece constante.
+-   Los individuos recuperados no vuelven a ser susceptibles con el tiempo.
+-   Las tasas de infección $\beta$ y recuperación $\gamma$ son constantes.
+-   La población es homogénea.
+-   Los individuos se encuentran entre sí de manera uniforme al azar (mezcla homogénea) y el tiempo de recuperación sigue una distribución exponencial con media $\frac{1}{\gamma}$.
+-   Es válido aproximar el número entero de individuos en cada compartimento mediante variables continuas (la población es lo suficientemente grande).
+
+En el caso de los datos del internado, la propagación de la enfermedad comienza con un individuo infectado, lo que lleva a las condiciones iniciales $I(0) = 1$, $S(0) = N - 1$, $R(0) = 0$.
+
+## Modelo estadístico
+
+Introducimos ahora una distribución de muestreo (también llamada verosimilitud)
+
+$$ 
+p(\mathcal Y \mid \theta) 
+$$
+
+la cual nos indica, dados los parámetros del modelo $\theta$, cómo generar datos $\mathcal Y$. La inferencia invierte este proceso generador de datos y plantea la pregunta: “dado un modelo y observaciones $\mathcal Y$, ¿cuáles son valores plausibles de los parámetros?”. En un marco bayesiano, el conjunto de valores plausibles está caracterizado por la distribución posterior,
+
+$$
+p(\theta \mid \mathcal Y).
+$$
+
+La regla de Bayes establece que
+
+$$
+p(\theta \mid \mathcal Y) \propto p(\mathcal Y \mid \theta) p(\theta)
+$$
+
+donde $p(\mathcal Y \mid \theta)$ es la distribución de muestreo, $p(\theta)$ es la distribución a priori, y $\propto$ significa “proporcional a”. La distribución a priori codifica la información que tenemos sobre los parámetros antes de observar los datos. En resumen, un modelo bayesiano combina un modelo matemático de nuestro conocimiento sobre los parámetros (la priori) con una distribución de muestreo, es decir, un modelo del proceso generador de datos.
+
+### Distribución de muestreo
+
+Dado un conjunto de parámetros de transmisión y condiciones iniciales, un modelo compartimental define una solución única para cada uno de los compartimentos, incluyendo el número de estudiantes infectados, $I_\text{ODE}(t)$. Queremos vincular esta solución con los datos observados, es decir, el número de estudiantes en cama, $I_\text{obs}(t)$, en cada instante de tiempo. Este último es una estimación ruidosa del número real de estudiantes infectados.
+
+Elegimos modelar el número de estudiantes en cama con una distribución de conteo: la Binomial Negativa. Esta distribución permite utilizar $I_\text{ODE}(t)$ como valor esperado y tener en cuenta la sobredispersión mediante el parámetro $\phi$:
+
+$$
+I_\text{obs}(t) \sim \text{NegBin}(I_\text{ODE}(t), \phi)
+$$
+
+Esto nos da $p(\mathcal Y \mid \theta)$, con $\theta = (\beta, \gamma, \phi)$ como los parámetros del modelo.
+
+### Distribución a priori
+
+Aún necesitamos especificar $p(\theta)$. Con $\theta = (\beta, \gamma, \phi)$, definimos una distribución a priori para cada uno de los tres parámetros. Una ventaja del enfoque bayesiano es que podemos incorporar formalmente conocimiento previo sobre los parámetros en el modelo.
+
+Por ejemplo, podemos especificar $\gamma \sim N(0.4, 0.5), \ T[0, \infty)$ (truncada en 0), lo que expresa nuestra creencia de que $\gamma$ debe ser positiva, y que $P(\gamma \leq 1) = 0.9$ (es decir, que la probabilidad de que el tiempo de recuperación sea mayor a 1 día es 0.9 a priori). Podemos modificar esta priori si se dispone de más información, restringiendo más la estimación de parámetros o, por el contrario, aumentando su varianza.
+
+La Sección 2 discute cómo verificar si nuestras distribuciones a priori son consistentes con el conocimiento disponible mediante verificaciones predictivas a priori.
+
+### Predicciones y cantidades derivadas
+
+Una vez ajustado el modelo y obtenida la distribución posterior de $\theta$, podemos derivar cantidades adicionales de interés. Podemos simular predicciones, $\mathcal Y_\mathrm{pred}$, y determinar el rango plausible de nuevas observaciones. Dado que estas predicciones se basan en la posterior $p(\theta \mid \mathcal Y)$, nuestras simulaciones tienen en cuenta la incertidumbre tanto en el proceso generador de datos como en la estimación de $\theta$.
+
+Además, podemos calcular la distribución posterior de las predicciones:
+
+$$
+p(\mathcal Y_\mathrm{pred} \mid \mathcal Y) = \int p(\mathcal Y_\mathrm{pred} \mid \theta)\, p(\theta \mid \mathcal Y)\, d\theta
+$$
+
+De manera similar, podemos calcular cantidades que dependen de los parámetros del modelo. Un ejemplo importante es el número básico de reproducción, $R_0$. Este se define como el número esperado de infecciones secundarias producidas por un individuo infectado en una población completamente susceptible durante todo el periodo infeccioso. Si $R_0 > 1$, la infección es sostenible y puede dar lugar a un brote importante; si $R_0 < 1$, bajo condiciones estables, la infección tenderá a desaparecer. La inferencia bayesiana permite construir también la distribución posterior de esta cantidad:
+
+$$
+p(R_0 \mid \mathcal Y).
+$$
+
+## Codificación del modelo: programa en Stan
+
+Necesitaremos las siguientes librerías
+
+```{r, message=FALSE}
+library(rstan)
+library(gridExtra)
+rstan_options (auto_write = TRUE)
+options (mc.cores = parallel::detectCores ())
+```
+
+### Modelación del proceso latente
+
+La dinámica de transmisión del brote de influenza se modela como un proceso latente gobernado por un sistema de ecuaciones diferenciales ordinarias (EDO) de la forma
+
+$$
+\frac{dy}{dt} = f(t,y)
+$$
+
+donde $y = (S, I, R)$ representa el estado de la población en el tiempo $t$. Dado que el sistema SIR es no lineal y no posee una solución analítica cerrada, las trayectorias de los compartimentos se obtienen mediante integración numérica utilizando un algoritmo de Runge-Kutta de 4$^\mathrm{th}$ / 5$^\mathrm{th}$ orden.
+
+Este procedimiento permite obtener el valor esperado del número de infectados en cada instante, el cual posteriormente se vincula con los datos observados de estudiantes en cama mediante la función de verosimilitud.
+
+### Building the model in Stan
+
+We next code the model in Stan, working through the various coding blocks. The `functions` block specifies `sir`
+
+Fixed data is declared in the `data` block:
+
+```{stan, eval=F, output.var="md"}
+data {
+  int<lower=1> n_days;
+  real y0[3];
+  real t0;
+  real ts[n_days];
+  int N;
+  int cases[n_days];
+}
+
+```
+
+We code transforms of the data in the `transformed data` block. In this example, we transform our data to match the signature of `sir` (with `x_r` being of length 0 because we have nothing to put in it).
+
+```{stan, eval=F, output.var="md"}
+transformed data {
+  real x_r[0];
+  int x_i[1] = { N };
+}
+
+```
+
+We next declare the model parameters. If you want some parameter to be bounded, and it is not already guaranteed by his prior, [you need to specify]{style="color: red;"} `<lower=a, upper=b>` when declaring this parameter. Note that this is how you put a truncated prior distribution on a parameter.
+
+```{stan, eval=F, output.var="md"}
+parameters {
+  real<lower=0> gamma;
+  real<lower=0> beta;
+  real<lower=0> phi_inv;
+}
+```
+
+And then transforms of the parameters
+
+```{stan, eval=F, output.var="md"}
+transformed parameters{
+  real y[n_days, 3];
+  real phi = 1. / phi_inv;
+  {
+    real theta[2];
+    theta[1] = beta;
+    theta[2] = gamma;
+
+    y = integrate_ode_rk45(sir, y0, t0, ts, theta, x_r, x_i);
+  }
+}
+```
+
+With the ODE solution, $y$, in hand, the only thing left to do is to code the prior and sampling distribution. <!-- As with the other parts of the model, these directly follow the notation in the mathematical specification. -->
+
+```{stan, eval=F, output.var="md"}
+model {
+  //priors
+  beta ~ normal(2, 1); //truncated at 0
+  gamma ~ normal(0.4, 0.5); //truncated at 0
+  phi_inv ~ exponential(5);
+  
+  //sampling distribution
+  //col(matrix x, int n) - The n-th column of matrix x. Here the number of infected people
+  cases ~ neg_binomial_2(col(to_matrix(y), 2), phi);
+}
+
+```
+
+Untangled from the inference, we can calculate the basic reproduction number, $R_0$, and [predictions for the number of cases]{style="color: red;"} in the `generated quantities` block:
+
+```{stan, eval=F, output.var="md"}
+generated quantities {
+  real R0 = beta / gamma;
+  real recovery_time = 1 / gamma;
+  real pred_cases[n_days];
+  pred_cases = neg_binomial_2_rng(col(to_matrix(y), 2) + 1e-5, phi);
+}
+```
+
+<!-- ### Pressing the inference button -->
+
+### Ajuste del modelo en R
+
+<!-- Para proporcionar los datos a Stan para la inferencia -->
+
+<!-- ^[¿Qué entendemos por inferencia aquí? Queremos inferir el valor de los parámetros $\theta$ dados los datos $y$. Ya hemos especificado las distribuciones a priori $p(\theta)$ y la verosimilitud $p(y|\theta)$. La regla de Bayes nos dice que la distribución posterior de los parámetros $\theta$ es $p(\theta|y) \propto p(\theta)p(y|\theta)$. Por lo tanto, conocemos esta distribución $p(\theta|y)$ hasta una constante multiplicativa. Stan proporciona una versión de Monte Carlo mediante cadenas de Markov (MCMC), que genera muestras que siguen aproximadamente la distribución $p(\theta|y)$. Al aproximar la distribución posterior verdadera mediante la distribución empírica de estas muestras, podemos calcular esperanzas de funciones de los parámetros o, por ejemplo, la probabilidad de que el número de estudiantes infectados sea mayor que 10 en el tercer día.] -->
+
+<!-- recopilamos todo en una lista -->
+
+Ahora vamos a R y recopilamos los datos en una lista.
+
+```{r}
+# time series of cases
+cases <- influenza_england_1978_school$in_bed  # Number of students in bed
+
+# total count
+N <- 763;
+
+# times
+n_days <- length(cases) 
+t <- seq(0, n_days, by = 1)
+t0 = 0 
+t <- t[-1]
+
+#initial conditions
+i0 <- 1
+s0 <- N - i0
+r0 <- 0
+y0 = c(S = s0, I = i0, R = r0)
+
+# data for Stan
+data_sir <- list(n_days = n_days, y0 = y0, t0 = t0, ts = t, N = N, cases = cases)
+
+# number of MCMC steps
+niter <- 2000
+
+```
+
+A continuación compilamos el modelo, guardado en el archivo `sir_negbin.stan`,
+
+```{r}
+model <- stan_model("stan_models/models_influenza/sir_negbin.stan")
+```
+
+y ejecutamos MCMC. Para este problema, es suficiente utilizar los valores por defecto de Stan. Nótese que, como es práctica estándar, ejecutamos 4 cadenas de Markov.
+
+```{r}
+fit_sir_negbin <- sampling(model,
+                data = data_sir,
+                iter = niter,
+                chains = 4, 
+                seed = 0)
+```
+
+```{r}
+check_hmc_diagnostics(fit_sir_negbin)
+```
+
+### Verificación de la inferencia
+
+Especifiquemos los parámetros de interés.
+
+```{r}
+pars=c('beta', 'gamma', "R0", "recovery_time")
+```
+
+<!-- Aquí mostramos la mediana (cuantil 0.5) y el intervalo del 90% (cuantiles 0.05 y 0.95), restringidos a los parámetros de interés. -->
+
+Comenzamos con una tabla resumen de los resultados, que muestra la media posterior, el error estándar, los cuantiles y algunos diagnósticos útiles.
+
+```{r}
+print(fit_sir_negbin, pars = pars)
+```
+
+```{r}
+traceplot(fit_sir_negbin, pars = pars)
+```
+
+Stan nos proporciona una gran cantidad de información para evaluar si la inferencia es confiable. Durante el muestreo, las advertencias pueden indicarnos si algo está mal (aquí no tenemos advertencias). En la tabla resumen, hay varias cantidades disponibles para verificar la inferencia. Aquí observamos que $\widehat R$ está cerca de 1 (\< 1.01), lo que indica que las 4 cadenas de Markov están en estrecho acuerdo entre sí. Además, el tamaño efectivo de muestra, $n_\mathrm{eff}$, es grande (\> 100), lo que significa que las cadenas de Markov pudieron explorar de manera coherente el espacio de parámetros. Por el contrario, valores grandes de $\widehat R$ y bajos de $n_\mathrm{eff}$ indicarían que las cadenas de Markov presentan mala mezcla. Aparte de corregir errores de código, mejorar la mezcla de las cadenas de Markov casi siempre requiere ajustar la especificación del modelo, por ejemplo mediante una reparametrización o el uso de priors más informativos.
+
+<!-- No se reportaron transiciones divergentes^[Las divergencias ocurren cuando el solucionador Hamiltoniano de Stan se desvía del Hamiltoniano verdadero, el cual debe conservarse, debido a problemas numéricos en la aproximación por pasos basada en gradientes de la curvatura de la log-densidad. Esto indica que las cadenas de Markov no exploraron completamente la posterior y que nuestros estimadores de Monte Carlo por cadenas de Markov estarán sesgados. Esto suele ser señal de que alguna región de la posterior es difícil de explorar y que el tamaño de paso depende fuertemente de la ubicación. Sin embargo, las divergencias a veces pueden ser falsos positivos. Para verificar si existen problemas reales de ajuste, podemos volver a ejecutar con una mayor probabilidad objetivo de aceptación, adapt_delta, lo cual forzará simulaciones más precisas de las trayectorias Hamiltonianas y reducirá los falsos positivos.] y, en general, no hubo mensajes de advertencia. -->
+
+<!-- Los valores de $\hat{R}$^[$\hat{R}$ indica qué tan bien se han mezclado las diferentes cadenas del MCMC: si $\hat{R}$ está cerca de 1, significa que todas las cadenas están explorando la misma región, y por lo tanto ninguna debería estar atrapada en una subregión. En la práctica, $\hat{R} \leq 1.01$ es satisfactorio.] están cerca de 1 (<1.01), y las estimaciones del tamaño efectivo de muestra^[El tamaño efectivo de muestra corresponde al número de muestras posteriores independientes que producirían el mismo error estándar de estimación para la **media** de los parámetros que las muestras obtenidas mediante el MCMC de Stan. Nótese que $n_{eff}$ puede ser mucho menor para cuantiles. En la práctica, se considera suficiente $n_{eff} \geq 100$ para estimar la media del parámetro. Con tamaños efectivos de muestra del orden de cien, los errores estándar son aproximadamente una décima parte de las desviaciones estándar posteriores, debido a una relación inversa con la raíz cuadrada.] para cada parámetro son suficientes (>100) para la inferencia^[Tanto valores grandes de $\hat{R}$ como bajos tamaños efectivos de muestra por transición serían consecuencia de cadenas de Markov con mala mezcla. Mejorar la mezcla de las cadenas de Markov casi siempre requiere ajustar la especificación del modelo, por ejemplo mediante una reparametrización o el uso de priors más informativos.]. -->
+
+Además, podemos graficar las densidades marginales posteriores y confirmar que las cadenas de Markov están en acuerdo entre sí.
+
+```{r}
+stan_dens(fit_sir_negbin, pars = pars, separate_chains = TRUE)
+```
+
+**Evaluación del modelo**
+
+Ahora que confiamos en nuestra inferencia, evaluemos la utilidad de nuestro modelo. La utilidad es específica del problema y puede incluir la estimación precisa de una cantidad o la predicción de comportamientos futuros. En general, es recomendable verificar si nuestro modelo, una vez ajustado, produce simulaciones que sean consistentes con los datos observados. Esta es la idea detrás de las comprobaciones predictivas posteriores (*posterior predictive checks*).
+
+Muestreamos predicciones, $\mathcal Y_\mathrm{pred}$, a partir de $p(\mathcal Y_\mathrm{pred} \mid \mathcal Y)$ y utilizamos estas muestras para construir una curva ajustada para los estudiantes en cama, junto con la incertidumbre (intervalo del 90%, lo que significa que se espera que los datos observados caigan fuera de este intervalo una de cada diez veces). Esta comprobación predictiva posterior nos permite verificar si el modelo captura la estructura de los datos. Aquí observamos que el modelo proporciona un ajuste satisfactorio a los datos, y que la incertidumbre del modelo es capaz de capturar la variabilidad de los datos.
+
+```{r}
+smr_pred <- cbind(as.data.frame(summary(
+  fit_sir_negbin, pars = "pred_cases", probs = c(0.05, 0.5, 0.95))$summary), t, cases)
+colnames(smr_pred) <- make.names(colnames(smr_pred)) # to remove % in the col names
+
+ggplot(smr_pred, mapping = aes(x = t)) +
+  geom_ribbon(aes(ymin = X5., ymax = X95.), fill = c_posterior, alpha = 0.35) +
+  geom_line(mapping = aes(x = t, y = X50.), color = c_posterior) + 
+  geom_point(mapping = aes(y = cases)) +
+  labs(x = "Días", y = "Número de estudiantes en cama")
+```
+
+Tal vez también queramos acceder al número real de personas infectadas en cada momento, y no solo al número de estudiantes en cama. Esta es una variable latente para la cual tenemos una estimación.
+
+```{r}
+params <- lapply(t, function(i){sprintf("y[%s,2]", i)}) #number of infected for each day
+smr_y <- as.data.frame(summary(fit_sir_negbin, 
+                               pars = params, probs = c(0.05, 0.5, 0.95))$summary)
+colnames(smr_y) <- make.names(colnames(smr_y)) # to remove % in the col names
+
+ggplot(smr_y, mapping = aes(x = t)) +
+  geom_ribbon(aes(ymin = X5., ymax = X95.), fill = c_posterior, alpha = 0.35) +
+  geom_line(mapping = aes(x = t, y = X50.), color = c_posterior) + 
+  labs(x = "Días", y = "Número de estudiantes infectados")
+
+```
+
+## Complete Stan program
+
+```{stan, eval=F, output.var="md"}
+functions {
+  real[] sir(real t, real[] y, real[] theta, 
+             real[] x_r, int[] x_i) {
+
+      real S = y[1];
+      real I = y[2];
+      real R = y[3];
+      real N = x_i[1];
+      
+      real beta = theta[1];
+      real gamma = theta[2];
+      
+      real dS_dt = -beta * I * S / N;
+      real dI_dt =  beta * I * S / N - gamma * I;
+      real dR_dt =  gamma * I;
+      
+      return {dS_dt, dI_dt, dR_dt};
+  }
+}
+data {
+  int<lower=1> n_days;
+  real y0[3];
+  real t0;
+  real ts[n_days];
+  int N;
+  int cases[n_days];
+}
+transformed data {
+  real x_r[0];
+  int x_i[1] = { N };
+}
+parameters {
+  real<lower=0> gamma;
+  real<lower=0> beta;
+  real<lower=0> phi_inv;
+}
+transformed parameters{
+  real y[n_days, 3];
+  real phi = 1. / phi_inv;
+  {
+    real theta[2];
+    theta[1] = beta;
+    theta[2] = gamma;
+
+    y = integrate_ode_rk45(sir, y0, t0, ts, theta, x_r, x_i);
+  }
+}
+model {
+  //priors
+  beta ~ normal(2, 1);
+  gamma ~ normal(0.4, 0.5);
+  phi_inv ~ exponential(5);
+  
+  //sampling distribution
+  //col(matrix x, int n) - The n-th column of matrix x. Here the number of infected people 
+  cases ~ neg_binomial_2(col(to_matrix(y), 2), phi);
+}
+generated quantities {
+  real R0 = beta / gamma;
+  real recovery_time = 1 / gamma;
+  real pred_cases[n_days];
+  pred_cases = neg_binomial_2_rng(col(to_matrix(y), 2), phi);
+}
+```
+
+## 2 Uso de datos simulados para comprender nuestro modelo
+
+Ajustamos un modelo sencillo a un conjunto de datos bien entendido. En la práctica, debemos proceder con mayor cautela y analizar el comportamiento de nuestro modelo y de nuestro algoritmo de inferencia. Con este fin, trabajar con datos simulados puede ser una estrategia muy productiva.
+
+### Evaluación de los priors
+
+Podemos verificar si nuestros *priors* son adecuados calculando la probabilidad *a priori* de varios parámetros epidemiológicos de interés. Por ejemplo, para la influenza, sabemos por conocimiento del dominio que $R_0$ suele estar entre 1 y 2, y que el tiempo de recuperación es aproximadamente de una semana. Queremos *priors* que permitan todas las configuraciones razonables de los datos, pero que excluyan escenarios claramente absurdos, de acuerdo con nuestra experiencia en el dominio. Para comprobar si nuestros *priors* cumplen este objetivo, podemos realizar una comprobación predictiva previa (*prior predictive check*). <!-- es decir, muestrear parámetros de interés a partir de la distribución a priori. -->
+
+Para llevar a cabo una comprobación predictiva previa, tomamos el mismo modelo que antes, colocamos los parámetros de interés en el bloque `generated_quantities` del código, y eliminamos el término de la distribución de muestreo del modelo. Sin la distribución de muestreo, los parámetros no se ajustan a los datos y, por lo tanto, se muestrean de su distribución *a priori*. Así, el código en Stan es el mismo que el código final, pero sin la línea `cases ~ neg_binomial_2(col(to_matrix(y), 2), phi);`. Un truco útil para facilitar la comprobación predictiva previa es añadir un interruptor `compute_likelihood` en los datos. Esto permite realizar tanto la comprobación predictiva previa como la inferencia con el mismo archivo de Stan.
+
+Compilamos el modelo sin el término de verosimilitud.
+
+```{r}
+model_prior <- stan_model("stan_models/models_influenza/sir_prior.stan")
+```
+
+y muestreamos de él.
+
+```{r}
+fit_sir_prior <- sampling(model_prior,
+                          data = data_sir, 
+                          chains = 4,
+                          seed = 0)
+```
+
+```{r}
+check_hmc_diagnostics(fit_sir_prior)
+```
+
+Esto nos proporciona muestras de la distribución *a priori* de los parámetros, las cuales podemos visualizar. Aquí mostramos la distribución del logaritmo del tiempo de recuperación, con las barras rojas indicando límites amplios para dicho tiempo (1/2 día y 30 días). Observamos que la mayor parte de la masa de probabilidad se encuentra entre las barras rojas, pero aún permitimos valores más extremos, lo que significa que nuestra posterior puede concentrarse fuera de esos límites si los datos lo justifican.
+
+```{r}
+s_prior <- rstan::extract(fit_sir_prior)
+ggplot(tibble(r = s_prior$recovery_time)) + 
+  geom_density(aes(x = r),fill=c_prior, alpha = 0.6) + 
+  geom_vline(xintercept = c(0.5,30), color = "red",linetype=2) + 
+  scale_x_log10() +
+  scale_y_continuous(expand=expansion(c(0,.05))) +
+  labs(x="Tiempo de recuperación (días, log)",y="Densidas de probabilidad")
+```
+
+Podemos hacer lo mismo para $R_0$ (nuevamente, en escala logarítmica), siendo los límites amplios 1 y 10.
+
+```{r}
+ggplot(tibble(r = s_prior$R0)) + 
+  geom_density(aes(x = r),fill=c_prior, alpha = 0.6) + 
+  geom_vline(xintercept = c(1,10), color = "red",linetype=2) + 
+  scale_x_log10() +
+  scale_y_continuous(expand=expansion(c(0,.05))) +
+  labs(x="Número básico de recuperación (log)",y="Densidas de probabilidad")
+```
+
+También podemos graficar trayectorias de infección según el *prior*, es decir, el número de personas infectadas en cada instante de tiempo de acuerdo con las distribuciones a priori de los parámetros.
+
+```{r, warning=FALSE}
+n_draws <- 1000
+draws <- as_tibble(t(s_prior$y[,,2][1:n_draws,])) %>% add_column(t=t)
+draws <-  pivot_longer(draws, c(1:1000) , names_to = "draw")
+draws %>% 
+  ggplot() + 
+  geom_line(mapping = aes(x = t, y=value, group = draw), alpha = 0.6, size=0.1) +
+  geom_hline(yintercept=763, color="red")  +
+  geom_text(x=2.2, y=727, label="Tamaño de la población", color="red") +
+  labs(x = "Días", y="Número de estudiantes infectados")
+```
+
+Y la mediana (línea negra) y el intervalo del 90% del número *a priori* de estudiantes en cama (es decir, el número observado de estudiantes infectados).
+
+```{r}
+smr_pred <- cbind(as.data.frame(summary(fit_sir_prior, pars="pred_cases", 
+                                        probs=c(0.05, 0.5, 0.95))$summary), t)
+colnames(smr_pred) <- make.names(colnames(smr_pred)) # to remove % in the col names
+
+ggplot(smr_pred, mapping=aes(x=t)) +
+  geom_ribbon(aes(ymin = X5., ymax = X95.), fill = c_prior, alpha = 0.35) +
+  geom_line(mapping=aes(x=t, y=X50.), color = c_prior) + 
+  geom_hline(yintercept=763, color="red" ) +
+  geom_text(x=2.2, y=727, label="Tamaño de la población", color="red") +
+  labs(x = "Días", y="Número de estudiantes en cama")
+```
+
+Parece que la mayoría de las trayectorias son razonables y bastante diversas. Aun así, algunas de las curvas se ven un poco extrañas y sugieren que podríamos refinar nuestros *priors* y hacerlos más informativos, aunque puede que no sea necesario en este caso.
+
+Por lo general, podemos trabajar con *priors* que no capturen todo nuestro conocimiento *a priori*, siempre que los datos sean lo suficientemente informativos. Sin embargo, cuando se trata de modelos complejos y datos relativamente escasos, normalmente necesitamos *priors* bien construidos para regularizar nuestras estimaciones y evitar problemas de no identificabilidad.
+
+### ¿Puede nuestro algoritmo de inferencia recuperar los parámetros correctos?
+
+Si bien existen muchas garantías teóricas para los algoritmos MCMC, quienes modelan deben tener en cuenta que estas se basan en un conjunto de supuestos que no siempre son fáciles de verificar y que muchas de estas garantías son asintóticas. Esto significa que se demuestran en el límite en el que tenemos un número infinito de muestras de la distribución posterior. Una revisión muy completa, aunque avanzada, sobre este tema puede encontrarse en @Roberts_mcmc_2004. En la práctica, debemos trabajar con recursos computacionales finitos y con supuestos que pueden o no cumplirse. Los diagnósticos que revisamos anteriormente, como $\widehat R$ y los tamaños efectivos de muestra, proporcionan condiciones necesarias para que el muestreador MCMC funcione, pero no suficientes. Aun así, son herramientas muy potentes para diagnosticar deficiencias en nuestra inferencia. Esta sección presenta herramientas adicionales, tanto desde una perspectiva rigurosa como pragmática.
+
+Ajustar el modelo a datos simulados es, si se hace correctamente, una forma eficaz de evaluar si nuestro algoritmo de inferencia es confiable. Si no podemos ajustar correctamente el modelo en un entorno controlado, es poco probable que podamos hacerlo con datos reales. Esto plantea, por supuesto, la cuestión de qué significa “ajustar correctamente” el modelo. En un contexto bayesiano, esto implica que nuestro procedimiento de inferencia recupere la distribución posterior correcta. Desafortunadamente, incluso en un entorno controlado, la distribución posterior no es, salvo en los casos más simples, tratable analíticamente.
+
+Un método potente para evaluar la precisión de nuestra inferencia bayesiana es la calibración basada en simulación (*simulation-based calibration*, SBC) [@Talts_sbc_2018]. El SBC aprovecha un resultado de consistencia muy elegante. La intuición es la siguiente: si extraemos parámetros de nuestra distribución *a priori*\
+$$
+  \theta_1, ..., \theta_2 \sim p(\theta)
+$$\
+y para cada $\theta_i$ simulamos un conjunto de datos $\mathcal Y^i$, entonces, al ajustar el modelo múltiples veces, podemos recuperar la distribución *a priori* a partir de las posteriores estimadas. Esta técnica está un poco fuera del alcance de este tutorial, pero recomendamos encarecidamente al lector consultar el artículo original o revisar cómo este método encaja dentro de un flujo de trabajo bayesiano bien fundamentado.
+
+Por el momento, nos centramos en una heurística más sencilla: ajustar el modelo a un conjunto de datos simulado y comprobar si recuperamos el valor correcto del parámetro. Este enfoque tiene limitaciones importantes: ¿cuándo consideramos que la distribución posterior estimada cubre el valor correcto? ¿Cómo sabemos si la varianza de la posterior está bien estimada?, etc. Aun así, la prueba es útil: en este entorno controlado, ¿las cadenas convergen? ¿Es numéricamente estable el cálculo de la log-densidad (por ejemplo, estamos usando el integrador de EDO adecuado)? ¿Nuestros *priors* evitan que las cadenas exploren regiones absurdas del espacio de parámetros? Estas son preguntas que esta prueba sencilla puede ayudarnos a abordar.
+
+<!-- Una comprobación rápida consiste en tomar una trayectoria muestreada del *prior* y verificar si podemos recuperar los parámetros verdaderos con nuestro modelo. Sin embargo, aunque esta prueba puede ser útil para identificar algunos problemas del modelo, está lejos de ser suficiente para falsificar o validar un modelo. Véase [@talts2018validating] para una discusión de este método y una forma adecuada de verificar la calibración ajustando muestras provenientes de la distribución *a priori*. -->
+
+Tomamos una muestra arbitraria de la distribución *a priori*.
+
+```{r}
+# one arbitrary draw from the prior distribution
+draw <- 12 
+# the number of predicted cases sampled from the prior distribution, which we will use as data
+cases_simu <- s_prior$pred_cases[draw,] 
+```
+
+Y la utilizamos como datos que ajustamos a nuestro modelo.
+
+```{r}
+data_simu <-  list (n_days  = n_days, y0 = y0, t0 = t0, ts = t, N=N, cases=cases_simu)
+fit_simu <- sampling(model, 
+                     data=data_simu, 
+                     chains=4,
+                     seed = 0)
+```
+
+```{r}
+check_hmc_diagnostics(fit_simu)
+```
+
+Luego podemos examinar la distribución posterior estimada. <!-- Aquí vemos que este es el caso. -->
+
+```{r}
+params = c("beta", "gamma", "phi")
+paste("true beta :", toString(s_prior$beta[draw]), 
+      ", true gamma :", toString(s_prior$gamma[draw]), ", true phi :", toString(s_prior$phi[draw]))
+```
+
+```{r}
+print(fit_simu, pars = params)
+```
+
+Graficamos la densidad posterior (en rojo) para verificar si coincide con el valor verdadero del parámetro (línea negra). La densidad es compatible con los parámetros verdaderos, aunque no siempre está centrada en ellos. Esto último no es preocupante, especialmente si el parámetro del modelo $\theta$ que muestreamos se encuentra en la cola de la distribución *a priori*. Podríamos repetir este proceso varias para obtener una mejor estimación para nuestra inferencia.
+
+```{r}
+plot_beta <- stan_dens(fit_simu, pars="beta", fill = c_simu) + geom_vline(xintercept =s_prior$beta[draw])
+plot_gamma <- stan_dens(fit_simu, pars="gamma", fill = c_simu) + geom_vline(xintercept = s_prior$gamma[draw])
+plot_phi <- stan_dens(fit_simu, pars="phi_inv", fill = c_simu) + geom_vline(xintercept = s_prior$phi_inv[draw])
+grid.arrange(plot_beta, plot_gamma, plot_phi, nrow=1)
+```
