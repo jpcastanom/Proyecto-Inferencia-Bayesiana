@@ -202,9 +202,7 @@ transformed data {
 
 ```
 
-
 Se declaran a continuación los parámetros del modelo. Si se desea que algún parámetro esté acotado y esto no lo garantiza ya su distribución priori, especificar `<lower=a, upper=b>` al declarar dicho parámetro. Notese que esta es la forma de establecer una distribución previa truncada para un parámetro.
-
 
 ```{stan, eval=F, output.var="md"}
 parameters {
@@ -329,17 +327,6 @@ Comenzamos con una tabla resumen de los resultados, que muestra la media posteri
 ```{r}
 print(fit_sir_negbin, pars = pars)
 ```
-```{r}
-# 1. Capturar el resumen completo como una matriz
-resumen_completo <- summary(fit_sir_negbin, pars = pars)$summary
-
-# 2. Seleccionar solo las columnas deseadas (n_eff es la columna 9 y Rhat la 10)
-# O mejor, usar los nombres de las columnas para mayor seguridad:
-tabla_diagnosticos <- resumen_completo[, c("n_eff", "Rhat")]
-
-# 3. Mostrar la tabla en la consola/documento
-print(tabla_diagnosticos)
-```
 
 ```{r}
 traceplot(fit_sir_negbin, pars = pars)
@@ -390,7 +377,7 @@ ggplot(smr_y, mapping = aes(x = t)) +
 
 ```
 
-## Complete Stan program
+## Programa completo de Stan
 
 ```{stan, eval=F, output.var="md"}
 functions {
