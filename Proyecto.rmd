@@ -174,11 +174,11 @@ donde $y = (S, I, R)$ representa el estado de la población en el tiempo $t$. Da
 
 Este procedimiento permite obtener el valor esperado del número de infectados en cada instante, el cual posteriormente se vincula con los datos observados de estudiantes en cama mediante la función de verosimilitud.
 
-### Building the model in Stan
+### Construcción del modelo en Stan
 
-We next code the model in Stan, working through the various coding blocks. The `functions` block specifies `sir`
+A continuación, se codifica el modelo en Stan, trabajando a través de los diversos bloques de código. El bloque `functions` especifica `sir`.
 
-Fixed data is declared in the `data` block:
+Los datos fijos se declaran en el bloque `data`:
 
 ```{stan, eval=F, output.var="md"}
 data {
@@ -192,7 +192,7 @@ data {
 
 ```
 
-We code transforms of the data in the `transformed data` block. In this example, we transform our data to match the signature of `sir` (with `x_r` being of length 0 because we have nothing to put in it).
+Se codifican las transformaciones de los datos en el bloque `transformed data`. En este ejemplo, transformar los datos para que coincidan con la firma de `sir` (con `x_r` de longitud 0 por no tener nada que incluir en él).
 
 ```{stan, eval=F, output.var="md"}
 transformed data {
@@ -202,7 +202,9 @@ transformed data {
 
 ```
 
-We next declare the model parameters. If you want some parameter to be bounded, and it is not already guaranteed by his prior, [you need to specify]{style="color: red;"} `<lower=a, upper=b>` when declaring this parameter. Note that this is how you put a truncated prior distribution on a parameter.
+
+Se declaran a continuación los parámetros del modelo. Si se desea que algún parámetro esté acotado y esto no lo garantiza ya su distribución priori, especificar `<lower=a, upper=b>` al declarar dicho parámetro. Notese que esta es la forma de establecer una distribución previa truncada para un parámetro.
+
 
 ```{stan, eval=F, output.var="md"}
 parameters {
@@ -212,7 +214,7 @@ parameters {
 }
 ```
 
-And then transforms of the parameters
+Y luego, realizar las transformaciones de los parámetros en el bloque `transformed parameters`.
 
 ```{stan, eval=F, output.var="md"}
 transformed parameters{
@@ -228,7 +230,7 @@ transformed parameters{
 }
 ```
 
-With the ODE solution, $y$, in hand, the only thing left to do is to code the prior and sampling distribution. <!-- As with the other parts of the model, these directly follow the notation in the mathematical specification. -->
+Con la solución de la ODE, $y$, a mano, lo único que queda por hacer es codificar la distribución previa y la de muestreo.
 
 ```{stan, eval=F, output.var="md"}
 model {
@@ -244,7 +246,7 @@ model {
 
 ```
 
-Untangled from the inference, we can calculate the basic reproduction number, $R_0$, and [predictions for the number of cases]{style="color: red;"} in the `generated quantities` block:
+Desvinculado de la inferencia, es posible calcular el número básico de reproducción, $R_0$, y las predicciones para el número de casos en el bloque `generated quantities`:
 
 ```{stan, eval=F, output.var="md"}
 generated quantities {
@@ -254,8 +256,6 @@ generated quantities {
   pred_cases = neg_binomial_2_rng(col(to_matrix(y), 2) + 1e-5, phi);
 }
 ```
-
-<!-- ### Pressing the inference button -->
 
 ### Ajuste del modelo en R
 
@@ -328,6 +328,17 @@ Comenzamos con una tabla resumen de los resultados, que muestra la media posteri
 
 ```{r}
 print(fit_sir_negbin, pars = pars)
+```
+```{r}
+# 1. Capturar el resumen completo como una matriz
+resumen_completo <- summary(fit_sir_negbin, pars = pars)$summary
+
+# 2. Seleccionar solo las columnas deseadas (n_eff es la columna 9 y Rhat la 10)
+# O mejor, usar los nombres de las columnas para mayor seguridad:
+tabla_diagnosticos <- resumen_completo[, c("n_eff", "Rhat")]
+
+# 3. Mostrar la tabla en la consola/documento
+print(tabla_diagnosticos)
 ```
 
 ```{r}
