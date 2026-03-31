@@ -10,7 +10,7 @@ output:
     toc: true
     toc_depth: 5
     toc_float: true
-bibliography: biblio.bib
+bibliography: references.bib
 ---
 
 ```{r setup, include=FALSE}
@@ -30,7 +30,7 @@ set.seed(1) # for reproductibility
 
 El modelado de enfermedades infecciosas ha evolucionado significativamente desde la formulación clásica del modelo Susceptible-Infectado-Recuperado (SIR). En la actualidad, la integración de sistemas de ecuaciones diferenciales ordinarias (ODE) con métodos computacionales de inferencia bayesiana permite una estimación robusta de parámetros biológicos bajo escenarios de alta incertidumbre. Herramientas como \textbf{Stan}, un lenguaje de programación probabilístico, han estandarizado el flujo de trabajo bayesiano, permitiendo que investigadores traduzcan modelos epidemiológicos complejos en estimaciones estadísticas precisas mediante el uso de algoritmos de Monte Carlo por Cadenas de Markov (MCMC).
 
-El presente trabajo se centra en la replicación de estos flujos de trabajo científicos mediante la reproducción de los resultados que exponen los autores \citeauthor{Grinsztajn2020}. Se toma como base el estudio de un brote de influenza ocurrido en 1978 en un internado británico, el cual sirve como caso de referencia para demostrar la capacidad de los modelos SIR y la inferencia bayesiana de capturar la dinámica de transmisión en poblaciones cerradas.
+El presente trabajo se centra en la replicación de estos flujos de trabajo científicos mediante la reproducción de los resultados que exponen los autores @Grinsztajn2020. Se toma como base el estudio de un brote de influenza ocurrido en 1978 en un internado británico, el cual sirve como caso de referencia para demostrar la capacidad de los modelos SIR y la inferencia bayesiana de capturar la dinámica de transmisión en poblaciones cerradas.
 
 # 1 SIR
 
@@ -532,11 +532,11 @@ Por lo general, podemos trabajar con *priors* que no capturen todo nuestro conoc
 
 ### ¿Puede nuestro algoritmo de inferencia recuperar los parámetros correctos?
 
-Si bien existen muchas garantías teóricas para los algoritmos MCMC, quienes modelan deben tener en cuenta que estas se basan en un conjunto de supuestos que no siempre son fáciles de verificar y que muchas de estas garantías son asintóticas. Esto significa que se demuestran en el límite en el que tenemos un número infinito de muestras de la distribución posterior. Una revisión muy completa, aunque avanzada, sobre este tema puede encontrarse en @Roberts_mcmc_2004. En la práctica, debemos trabajar con recursos computacionales finitos y con supuestos que pueden o no cumplirse. Los diagnósticos que revisamos anteriormente, como $\widehat R$ y los tamaños efectivos de muestra, proporcionan condiciones necesarias para que el muestreador MCMC funcione, pero no suficientes. Aun así, son herramientas muy potentes para diagnosticar deficiencias en nuestra inferencia. Esta sección presenta herramientas adicionales, tanto desde una perspectiva rigurosa como pragmática.
+Si bien existen muchas garantías teóricas para los algoritmos MCMC, quienes modelan deben tener en cuenta que estas se basan en un conjunto de supuestos que no siempre son fáciles de verificar y que muchas de estas garantías son asintóticas. Esto significa que se demuestran en el límite en el que tenemos un número infinito de muestras de la distribución posterior. En la práctica, debemos trabajar con recursos computacionales finitos y con supuestos que pueden o no cumplirse. Los diagnósticos que revisamos anteriormente, como $\widehat R$ y los tamaños efectivos de muestra, proporcionan condiciones necesarias para que el muestreador MCMC funcione, pero no suficientes. Aun así, son herramientas muy potentes para diagnosticar deficiencias en nuestra inferencia. Esta sección presenta herramientas adicionales, tanto desde una perspectiva rigurosa como pragmática.
 
 Ajustar el modelo a datos simulados es, si se hace correctamente, una forma eficaz de evaluar si nuestro algoritmo de inferencia es confiable. Si no podemos ajustar correctamente el modelo en un entorno controlado, es poco probable que podamos hacerlo con datos reales. Esto plantea, por supuesto, la cuestión de qué significa “ajustar correctamente” el modelo. En un contexto bayesiano, esto implica que nuestro procedimiento de inferencia recupere la distribución posterior correcta. Desafortunadamente, incluso en un entorno controlado, la distribución posterior no es, salvo en los casos más simples, tratable analíticamente.
 
-Un método potente para evaluar la precisión de nuestra inferencia bayesiana es la calibración basada en simulación (*simulation-based calibration*, SBC) [@Talts_sbc_2018]. El SBC aprovecha un resultado de consistencia muy elegante. La intuición es la siguiente: si extraemos parámetros de nuestra distribución *a priori*\
+Un método potente para evaluar la precisión de nuestra inferencia bayesiana es la calibración basada en simulación (*simulation-based calibration*, SBC). El SBC aprovecha un resultado de consistencia muy elegante. La intuición es la siguiente: si extraemos parámetros de nuestra distribución *a priori*\
 $$
   \theta_1, ..., \theta_2 \sim p(\theta)
 $$\
@@ -544,7 +544,7 @@ y para cada $\theta_i$ simulamos un conjunto de datos $\mathcal Y^i$, entonces, 
 
 Por el momento, nos centramos en una heurística más sencilla: ajustar el modelo a un conjunto de datos simulado y comprobar si recuperamos el valor correcto del parámetro. Este enfoque tiene limitaciones importantes: ¿cuándo consideramos que la distribución posterior estimada cubre el valor correcto? ¿Cómo sabemos si la varianza de la posterior está bien estimada?, etc. Aun así, la prueba es útil: en este entorno controlado, ¿las cadenas convergen? ¿Es numéricamente estable el cálculo de la log-densidad (por ejemplo, estamos usando el integrador de EDO adecuado)? ¿Nuestros *priors* evitan que las cadenas exploren regiones absurdas del espacio de parámetros? Estas son preguntas que esta prueba sencilla puede ayudarnos a abordar.
 
-<!-- Una comprobación rápida consiste en tomar una trayectoria muestreada del *prior* y verificar si podemos recuperar los parámetros verdaderos con nuestro modelo. Sin embargo, aunque esta prueba puede ser útil para identificar algunos problemas del modelo, está lejos de ser suficiente para falsificar o validar un modelo. Véase [@talts2018validating] para una discusión de este método y una forma adecuada de verificar la calibración ajustando muestras provenientes de la distribución *a priori*. -->
+<!-- Una comprobación rápida consiste en tomar una trayectoria muestreada del *prior* y verificar si podemos recuperar los parámetros verdaderos con nuestro modelo. Sin embargo, aunque esta prueba puede ser útil para identificar algunos problemas del modelo, está lejos de ser suficiente para falsificar o validar un modelo. -->
 
 Tomamos una muestra arbitraria de la distribución *a priori*.
 
